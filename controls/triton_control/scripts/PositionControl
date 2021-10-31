@@ -1,11 +1,13 @@
 #!/usr/bin/env python3
 
 import math
+from operator import ge
+from re import A
 import numpy
 import rospy
 import tf.transformations as trans
 from pid_controller import PID
-
+from std_msgs.msg import Float32, Float64
 from dynamic_reconfigure.server import Server
 from triton_control.cfg import PIDparamsConfig
 import geometry_msgs.msg as geometry_msgs
@@ -20,18 +22,33 @@ class PositionControllerNode:
 
         self.pos_des = numpy.zeros(3)
         self.quat_des = numpy.array([0, 0, 0, 1])
-
+        self.P_l = 1.0
+        self.I_l = self.D_l = 0.0
+        self.P_r = 1.0
+        self.I_r = self.D_r = 0.0
         self.initialized = False
-
         # Initialize pids with default parameters
-        self.pid_rot = PID.PIDRegulator(1, 0, 0, 1)
-        self.pid_pos = PID.PIDRegulator(1, 0, 0, 1)
 
         # ROS infrastructure
         self.sub_cmd_pose = rospy.Subscriber('cmd_pose', numpy_msg(geometry_msgs.Pose), self.cmd_pose_callback)
         self.sub_odometry = rospy.Subscriber('odom', numpy_msg(geometry_msgs.PoseStamped), self.odometry_callback)
         self.pub_cmd_thrust = rospy.Publisher('thruster_manager/input', geometry_msgs.Wrench, queue_size=10)
         self.srv_reconfigure = Server(PIDparamsConfig, self.config_callback)
+        self.c = rospy.Publisher('control_signal', numpy_msg(geometry_msgs.Vector3), queue_size=10)
+        rospy.Subscriber('PID_gains_l', numpy_msg(geometry_msgs.Vector3), self.gains_l_callback)
+        rospy.Subscriber('PID_gains_a', numpy_msg(geometry_msgs.Vector3), self.gains_r_callback)
+
+    def gains_l_callback(self, msg):
+        
+        self.P_l = msg.x
+        self.I_l = msg.y
+        self.D_l = msg.z
+
+    def gains_r_callback(self, msg):
+        
+        self.P_r = msg.x
+        self.I_r = msg.y
+        self.D_r = msg.z
 
     def cmd_pose_callback(self, msg):
         """Handle updated set pose callback."""
@@ -78,8 +95,17 @@ class PositionControllerNode:
         # Error angles
         e_rot = numpy.array(trans.euler_from_quaternion(e_rot_quat))
 
+        self.pid_rot = PID.PIDRegulator(self.P_r * 10 , self.I_r * 10, self.D_r * 10, 1)
+        self.pid_pos = PID.PIDRegulator(self.P_l * 10 , self.I_l * 10, self.D_l * 10, 1)
+
+        A = geometry_msgs.Vector3()
         th_linear = self.pid_pos.regulate(e_pos_body, t)
         th_angular = self.pid_rot.regulate(e_rot, t)
+        A.x = numpy.linalg.norm(th_linear)
+        A.y = numpy.linalg.norm(th_angular)
+        A.z = 0.0
+
+        self.c.publish(A)
 
         # Convert and publish vel. command:
         cmd_thrust = geometry_msgs.Wrench()

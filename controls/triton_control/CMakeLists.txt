@@ -162,6 +162,7 @@ ${catkin_INCLUDE_DIRS}
 catkin_install_python(PROGRAMS
   scripts/PositionControl
   scripts/GroundTruth
+  scripts/Autotuner
   DESTINATION ${CATKIN_PACKAGE_BIN_DESTINATION}
 )
 
